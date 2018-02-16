@@ -34,6 +34,7 @@ class SubtitleStreamController extends TaskLoop {
     this.state = State.STOPPED;
     this.currentTrackId = -1;
     this.decrypter = new Decrypter(hls.observer, hls.config);
+    this.media = null;
   }
 
   onHandlerDestroyed() {
@@ -68,7 +69,8 @@ class SubtitleStreamController extends TaskLoop {
     this.nextFrag();
   }
 
-  onMediaAttached() {
+  onMediaAttached(data) {
+    this.media = data.media;
     this.state = State.IDLE;
   }
 
@@ -88,38 +90,30 @@ class SubtitleStreamController extends TaskLoop {
   doTick() {
     switch(this.state) {
       case State.IDLE:
-        const tracks = this.tracks;
-        let trackId = this.currentTrackId;
-
-        const processedFragSNs = this.vttFragSNsProcessed[trackId],
-            fragQueue = this.vttFragQueues[trackId],
-            currentFragSN = !!this.currentlyProcessing ? this.currentlyProcessing.sn : -1;
-
-        const alreadyProcessed = function(frag) {
-          return processedFragSNs.indexOf(frag.sn) > -1;
-        };
-
-        const alreadyInQueue = function(frag) {
-          return fragQueue.some(fragInQueue => {return fragInQueue.sn === frag.sn;});
-        };
 
         // exit if tracks don't exist
-        if (!tracks) {
+        if (!this.tracks) {
           break;
         }
-        var trackDetails;
 
-        if (trackId < tracks.length) {
-          trackDetails = tracks[trackId].details;
+        const currentFragSN = Boolean(this.currentlyProcessing) ? this.currentlyProcessing.sn : -1;
+
+        let trackDetails;
+        if (this.currentTrackId < this.tracks.length) {
+          trackDetails = this.tracks[this.currentTrackId].details;
         }
 
         if (typeof trackDetails === 'undefined') {
           break;
         }
 
+        // Prevents too many simultaneous downloads.
+        const reducedFragments = this.getFragmentsBasedOnMaxBufferLength(trackDetails.fragments);
+
         // Add all fragments that haven't been, aren't currently being and aren't waiting to be processed, to queue.
-        trackDetails.fragments.forEach(frag => {
-          if(!(alreadyProcessed(frag) || frag.sn === currentFragSN || alreadyInQueue(frag))) {
+
+        reducedFragments.forEach(frag => {
+          if(!(this.isAlreadyProcessed(frag) || frag.sn === currentFragSN || this.isAlreadyInQueue(frag))) {
             // Load key if subtitles are encrypted
             if ((frag.decryptdata && frag.decryptdata.uri != null) && (frag.decryptdata.key == null)) {
               logger.log(`Loading key for ${frag.sn}`);
@@ -127,13 +121,50 @@ class SubtitleStreamController extends TaskLoop {
               this.hls.trigger(Event.KEY_LOADING, {frag: frag});
             } else {
               // Frags don't know their subtitle track ID, so let's just add that...
-              frag.trackId = trackId;
-              fragQueue.push(frag);
+              frag.trackId = this.currentTrackId;
+              this.vttFragQueues[this.currentTrackId].push(frag);
+
               this.nextFrag();
             }
           }
         });
       }
+  }
+
+  /**
+   * If you enter a live broadcast with time shift enabled (or scrub an on demand video),
+   * the size of the fragment list might be huge. This function takes the current time and max buffer length into account
+   * when deciding which fragments to be downloaded.
+   *
+   * [ . . . . . . . . . . . . . . . . .] // List of fragments (may as well be thousands)
+   *                     |                // Current time
+   *                   [ . . . . . ]      // Fragments to be downloaded if max buffer length is 5.
+   *
+   * @param fragments
+   * @returns {Array} reduced fragments
+   */
+  getFragmentsBasedOnMaxBufferLength(fragments = []) {
+    if (!this.config.maxBufferLength) {
+      return fragments;
+    }
+
+    // Find the lowest fragment index based on current time
+    const lowerIndex = fragments.findIndex((fragment) => fragment.start >= this.media.currentTime);
+
+    // Find the upper fragment index based on lower index and max buffer length
+    const upperIndex = Math.min(fragments.length - 1, (lowerIndex + this.config.maxBufferLength));
+
+    return fragments.filter((fragment, index) => index >= lowerIndex && index <= upperIndex);
+  }
+
+  isAlreadyProcessed(frag) {
+    return this.vttFragSNsProcessed[this.currentTrackId].indexOf(frag.sn) > -1;
+  }
+
+  isAlreadyInQueue(frag) {
+    return this.vttFragQueues[this.currentTrackId].some(
+      (fragInQueue) => fragInQueue.sn === frag.sn
+    );
   }
 
   // Got all new subtitle tracks.
@@ -160,8 +191,26 @@ class SubtitleStreamController extends TaskLoop {
   onKeyLoaded() {
     if (this.state === State.KEY_LOADING) {
       this.state = State.IDLE;
+      this.clearInterval();
+
       this.tick();
+
+      return;
     }
+
+    const noOfFragments = this.tracks[this.currentTrackId].details.fragments.length;
+    const noOfProcessed = this.vttFragSNsProcessed[this.currentTrackId].length;
+    const noOfQueued = this.vttFragQueues[this.currentTrackId].length;
+
+    if ((noOfProcessed + noOfQueued) < noOfFragments) { // Check if there are unhandled fragments
+
+      // TODO This should be cleared on pause, error etc.
+      this.setInterval(1000);
+
+      return;
+    }
+
+    this.clearInterval();
   }
 
   onFragLoaded(data) {
