@@ -202,7 +202,9 @@ class SubtitleStreamController extends TaskLoop {
     const noOfProcessed = this.vttFragSNsProcessed[this.currentTrackId].length;
     const noOfQueued = this.vttFragQueues[this.currentTrackId].length;
 
-    if ((noOfProcessed + noOfQueued) < noOfFragments) {
+    if ((noOfProcessed + noOfQueued) < noOfFragments) { // Check if there are unhandled fragments
+
+      // TODO This should be cleared on pause, error etc.
       this.setInterval(1000);
 
       return;
