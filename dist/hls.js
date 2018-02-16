@@ -15862,6 +15862,7 @@ var subtitle_stream_controller_SubtitleStreamController = function (_TaskLoop) {
     _this.state = subtitle_stream_controller_State.STOPPED;
     _this.currentTrackId = -1;
     _this.decrypter = new decrypter["a" /* default */](hls.observer, hls.config);
+    _this.media = null;
     return _this;
   }
 
@@ -15905,7 +15906,8 @@ var subtitle_stream_controller_SubtitleStreamController = function (_TaskLoop) {
     this.nextFrag();
   };
 
-  SubtitleStreamController.prototype.onMediaAttached = function onMediaAttached() {
+  SubtitleStreamController.prototype.onMediaAttached = function onMediaAttached(data) {
+    this.media = data.media;
     this.state = subtitle_stream_controller_State.IDLE;
   };
 
@@ -15929,40 +15931,30 @@ var subtitle_stream_controller_SubtitleStreamController = function (_TaskLoop) {
 
     switch (this.state) {
       case subtitle_stream_controller_State.IDLE:
-        var tracks = this.tracks;
-        var trackId = this.currentTrackId;
-
-        var processedFragSNs = this.vttFragSNsProcessed[trackId],
-            fragQueue = this.vttFragQueues[trackId],
-            currentFragSN = !!this.currentlyProcessing ? this.currentlyProcessing.sn : -1;
-
-        var alreadyProcessed = function alreadyProcessed(frag) {
-          return processedFragSNs.indexOf(frag.sn) > -1;
-        };
-
-        var alreadyInQueue = function alreadyInQueue(frag) {
-          return fragQueue.some(function (fragInQueue) {
-            return fragInQueue.sn === frag.sn;
-          });
-        };
 
         // exit if tracks don't exist
-        if (!tracks) {
+        if (!this.tracks) {
           break;
         }
-        var trackDetails;
 
-        if (trackId < tracks.length) {
-          trackDetails = tracks[trackId].details;
+        var currentFragSN = Boolean(this.currentlyProcessing) ? this.currentlyProcessing.sn : -1;
+
+        var trackDetails = void 0;
+        if (this.currentTrackId < this.tracks.length) {
+          trackDetails = this.tracks[this.currentTrackId].details;
         }
 
         if (typeof trackDetails === 'undefined') {
           break;
         }
 
+        // Prevents too many simultaneous downloads.
+        var reducedFragments = this.getFragmentsBasedOnMaxBufferLength(trackDetails.fragments);
+
         // Add all fragments that haven't been, aren't currently being and aren't waiting to be processed, to queue.
-        trackDetails.fragments.forEach(function (frag) {
-          if (!(alreadyProcessed(frag) || frag.sn === currentFragSN || alreadyInQueue(frag))) {
+
+        reducedFragments.forEach(function (frag) {
+          if (!(_this3.isAlreadyProcessed(frag) || frag.sn === currentFragSN || _this3.isAlreadyInQueue(frag))) {
             // Load key if subtitles are encrypted
             if (frag.decryptdata && frag.decryptdata.uri != null && frag.decryptdata.key == null) {
               logger["b" /* logger */].log('Loading key for ' + frag.sn);
@@ -15970,8 +15962,9 @@ var subtitle_stream_controller_SubtitleStreamController = function (_TaskLoop) {
               _this3.hls.trigger(events["a" /* default */].KEY_LOADING, { frag: frag });
             } else {
               // Frags don't know their subtitle track ID, so let's just add that...
-              frag.trackId = trackId;
-              fragQueue.push(frag);
+              frag.trackId = _this3.currentTrackId;
+              _this3.vttFragQueues[_this3.currentTrackId].push(frag);
+
               _this3.nextFrag();
             }
           }
@@ -15979,18 +15972,64 @@ var subtitle_stream_controller_SubtitleStreamController = function (_TaskLoop) {
     }
   };
 
+  /**
+   * If you enter a live broadcast with time shift enabled (or scrub an on demand video),
+   * the size of the fragment list might be huge. This function takes the current time and max buffer length into account
+   * when deciding which fragments to be downloaded.
+   *
+   * [ . . . . . . . . . . . . . . . . .] // List of fragments (may as well be thousands)
+   *                     |                // Current time
+   *                   [ . . . . . ]      // Fragments to be downloaded if max buffer length is 5.
+   *
+   * @param fragments
+   * @returns {Array} reduced fragments
+   */
+
+
+  SubtitleStreamController.prototype.getFragmentsBasedOnMaxBufferLength = function getFragmentsBasedOnMaxBufferLength() {
+    var _this4 = this;
+
+    var fragments = arguments.length > 0 && arguments[0] !== undefined ? arguments[0] : [];
+
+    if (!this.config.maxBufferLength) {
+      return fragments;
+    }
+
+    // Find the lowest fragment index based on current time
+    var lowerIndex = fragments.findIndex(function (fragment) {
+      return fragment.start >= _this4.media.currentTime;
+    });
+
+    // Find the upper fragment index based on lower index and max buffer length
+    var upperIndex = Math.min(fragments.length - 1, lowerIndex + this.config.maxBufferLength);
+
+    return fragments.filter(function (fragment, index) {
+      return index >= lowerIndex && index <= upperIndex;
+    });
+  };
+
+  SubtitleStreamController.prototype.isAlreadyProcessed = function isAlreadyProcessed(frag) {
+    return this.vttFragSNsProcessed[this.currentTrackId].indexOf(frag.sn) > -1;
+  };
+
+  SubtitleStreamController.prototype.isAlreadyInQueue = function isAlreadyInQueue(frag) {
+    return this.vttFragQueues[this.currentTrackId].some(function (fragInQueue) {
+      return fragInQueue.sn === frag.sn;
+    });
+  };
+
   // Got all new subtitle tracks.
 
 
   SubtitleStreamController.prototype.onSubtitleTracksUpdated = function onSubtitleTracksUpdated(data) {
-    var _this4 = this;
+    var _this5 = this;
 
     logger["b" /* logger */].log('subtitle tracks updated');
     this.tracks = data.subtitleTracks;
     this.clearVttFragQueues();
     this.vttFragSNsProcessed = {};
     this.tracks.forEach(function (track) {
-      _this4.vttFragSNsProcessed[track.id] = [];
+      _this5.vttFragSNsProcessed[track.id] = [];
     });
   };
 
@@ -16009,8 +16048,27 @@ var subtitle_stream_controller_SubtitleStreamController = function (_TaskLoop) {
   SubtitleStreamController.prototype.onKeyLoaded = function onKeyLoaded() {
     if (this.state === subtitle_stream_controller_State.KEY_LOADING) {
       this.state = subtitle_stream_controller_State.IDLE;
+      this.clearInterval();
+
       this.tick();
+
+      return;
     }
+
+    var noOfFragments = this.tracks[this.currentTrackId].details.fragments.length;
+    var noOfProcessed = this.vttFragSNsProcessed[this.currentTrackId].length;
+    var noOfQueued = this.vttFragQueues[this.currentTrackId].length;
+
+    if (noOfProcessed + noOfQueued < noOfFragments) {
+      // Check if there are unhandled fragments
+
+      // TODO This should be cleared on pause, error etc.
+      this.setInterval(1000);
+
+      return;
+    }
+
+    this.clearInterval();
   };
 
   SubtitleStreamController.prototype.onFragLoaded = function onFragLoaded(data) {
