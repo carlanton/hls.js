@@ -114,9 +114,6 @@ class SubtitleStreamController extends TaskLoop {
 
         reducedFragments.forEach(frag => {
           if(!(this.isAlreadyProcessed(frag) || frag.sn === currentFragSN || this.isAlreadyInQueue(frag))) {
-
-            console.log('ADD FRAGMENT TO QUEUE', frag.start);
-
             // Load key if subtitles are encrypted
             if ((frag.decryptdata && frag.decryptdata.uri != null) && (frag.decryptdata.key == null)) {
               logger.log(`Loading key for ${frag.sn}`);
