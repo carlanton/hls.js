@@ -91,8 +91,8 @@ class SubtitleStreamController extends TaskLoop {
     switch(this.state) {
       case State.IDLE:
 
-        // exit if tracks don't exist
-        if (!this.tracks) {
+        // exit if tracks don't exist or if current track id is -1
+        if (!this.tracks || this.currentTrackId === -1) {
           break;
         }
 
