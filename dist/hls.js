@@ -15932,8 +15932,8 @@ var subtitle_stream_controller_SubtitleStreamController = function (_TaskLoop) {
     switch (this.state) {
       case subtitle_stream_controller_State.IDLE:
 
-        // exit if tracks don't exist
-        if (!this.tracks) {
+        // exit if tracks don't exist or if current track id is -1
+        if (!this.tracks || this.currentTrackId === -1) {
           break;
         }
 
