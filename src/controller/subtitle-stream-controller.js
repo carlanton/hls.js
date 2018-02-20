@@ -154,7 +154,7 @@ class SubtitleStreamController extends TaskLoop {
     // Find the upper fragment index based on lower index and max buffer length
     const upperIndex = Math.min(fragments.length - 1, (lowerIndex + this.config.maxBufferLength));
 
-    return fragments.filter((fragment, index) => index >= lowerIndex && index <= upperIndex);
+    return fragments.filter((fragment, index) => (index >= lowerIndex && index <= upperIndex) || index === 0);
   }
 
   isAlreadyProcessed(frag) {
@@ -198,7 +198,17 @@ class SubtitleStreamController extends TaskLoop {
       return;
     }
 
-    const noOfFragments = this.tracks[this.currentTrackId].details.fragments.length;
+    if (this.currentTrackId === -1 || this.currentTrackId >= this.tracks.length) {
+      return;
+    }
+
+    const trackDetails = this.tracks[this.currentTrackId].details;
+
+    if (!trackDetails) {
+      return;
+    }
+
+    const noOfFragments = trackDetails.fragments.length;
     const noOfProcessed = this.vttFragSNsProcessed[this.currentTrackId].length;
     const noOfQueued = this.vttFragQueues[this.currentTrackId].length;
 
