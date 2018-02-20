@@ -16004,7 +16004,7 @@ var subtitle_stream_controller_SubtitleStreamController = function (_TaskLoop) {
     var upperIndex = Math.min(fragments.length - 1, lowerIndex + this.config.maxBufferLength);
 
     return fragments.filter(function (fragment, index) {
-      return index >= lowerIndex && index <= upperIndex;
+      return index >= lowerIndex && index <= upperIndex || index === 0;
     });
   };
 
@@ -16055,7 +16055,17 @@ var subtitle_stream_controller_SubtitleStreamController = function (_TaskLoop) {
       return;
     }
 
-    var noOfFragments = this.tracks[this.currentTrackId].details.fragments.length;
+    if (this.currentTrackId === -1 || this.currentTrackId >= this.tracks.length) {
+      return;
+    }
+
+    var trackDetails = this.tracks[this.currentTrackId].details;
+
+    if (!trackDetails) {
+      return;
+    }
+
+    var noOfFragments = trackDetails.fragments.length;
     var noOfProcessed = this.vttFragSNsProcessed[this.currentTrackId].length;
     var noOfQueued = this.vttFragQueues[this.currentTrackId].length;
 
