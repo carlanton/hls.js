@@ -1,6 +1,9 @@
 import VTTParser from './vttparser';
 import { utf8ArrayToStr } from '../demux/id3';
 
+const PTS_MAX = 8589934592; // 2^33
+const TIMESCALE = 90000;
+
 // String.prototype.startsWith is not supported in IE11
 const startsWith = function(inputString, searchString, position) {
   return inputString.substr(position || 0, searchString.length) === searchString;
@@ -89,6 +92,18 @@ const WebVTTParser = {
                 } else {
                     calculateOffset(vttCCs, cc, presentationTime);
                 }
+
+                // Calculate how many times the mpegts clock has rolled over
+                if (currCC.rolloverOffset === undefined) {
+                    const numberOfRollovers = (cue.startTime * TIMESCALE / PTS_MAX) | 0;
+
+                    if (numberOfRollovers > 0) {
+                        currCC.rolloverOffset = (numberOfRollovers * PTS_MAX + syncPTS) / TIMESCALE;
+                    } else {
+                        currCC.rolloverOffset = 0;
+                    }
+                }
+                cueOffset -= currCC.rolloverOffset;
             }
 
             if (presentationTime) {
@@ -98,7 +113,6 @@ const WebVTTParser = {
 
             cue.startTime += cueOffset - localTime;
             cue.endTime += cueOffset - localTime;
-
             // Create a unique hash id for a cue based on start/end times and text.
             // This helps timeline-controller to avoid showing repeated captions.
             cue.id = hash(cue.startTime.toString()) + hash(cue.endTime.toString()) + hash(cue.text);
@@ -139,14 +153,16 @@ const WebVTTParser = {
                     });
                     try {
                         // Calculate subtitle offset in milliseconds.
-                        // If sync PTS is less than zero, we have a 33-bit wraparound, which is fixed by adding 2^33 = 8589934592.
-                        syncPTS = syncPTS < 0 ? syncPTS + 8589934592 : syncPTS;
-                        // Adjust MPEGTS by sync PTS.
-                        mpegTs -= syncPTS;
+                        // If sync PTS is less than zero, we have a 33-bit wraparound, which is fixed by adding 2^33.
+                        syncPTS = syncPTS < 0 ? syncPTS + PTS_MAX : syncPTS;
+                        if (mpegTs !== 0) {
+                            // Adjust MPEGTS by sync PTS
+                            mpegTs -= syncPTS;
+                        }
                         // Convert cue time to seconds
                         localTime = cueString2millis(cueTime) / 1000;
                         // Convert MPEGTS to seconds from 90kHz.
-                        presentationTime = mpegTs / 90000;
+                        presentationTime = mpegTs / TIMESCALE;
 
                         if (localTime === -1) {
                             parsingError = new Error(`Malformed X-TIMESTAMP-MAP: ${line}`);
